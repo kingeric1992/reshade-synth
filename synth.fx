@@ -4,8 +4,9 @@
  ******************************************************************/
 
 #define KEY_PAUSE 0x20 // space
-#define KEY_RESET 0x52 // R
+#define KEY_RESET VK_R // R
 
+#include "macro_vk.fxh"
 
 namespace synth
 {
@@ -25,6 +26,7 @@ namespace synth
     uniform bool    gRight      < source="key"; keycode = VK_D;>;
     uniform bool    gUp         < source="key"; keycode = VK_SPACE;>;
     uniform bool    gDown       < source="key"; keycode = VK_CONTROL;>;
+    uniform bool    gReset      < source="key"; keycode = KEY_RESET; >;
 
     uniform float   gLMB        < source="mousebutton"; keycode = 0x00;>; //LMB
     uniform float   gRMB        < source="mousebutton"; keycode = 0x01;>; //RMB
@@ -48,6 +50,9 @@ namespace synth
     sampler2D sampUpd { Texture=texUpd; FILTER(POINT); };
     sampler2D sampDep { Texture=texDep; FILTER(POINT); };
 
+    #define PI  3.1415926
+    #define PI2 6.2831853
+
 /******************************************************************
  *  helpers
  ******************************************************************/
@@ -70,12 +75,12 @@ namespace synth
     float3x3 rotX(float r) { float2 sc = sincos(r); return float3x3( 1,0,0, 0,sc.y,-sc.x, 0,sc.x,sc.y); }
     float3x3 rotY(float r) { float2 sc = sincos(r); return float3x3( sc.y,0,sc.x, 0,1,0, -sc.x,0,sc.y); }
     float3x3 rotZ(float r) { float2 sc = sincos(r); return float3x3( sc.y,-sc.x,0, sc.x,sc.y,0, 0,0,1); }
-    float3x3 rotZYX(float3 r) { return mul(mul(rotZ(r.x),rotX(PI-r.y)),rotZ(r.z)); }
-    float2   map2D(uint id, float n) { float2 r; r.x = trunc(id/n), r.y = id - r.x * n; return r; }
+    float3x3 rotXYZ(float3 r) { return mul(mul(rotZ(r.z),rotY(r.y)),rotX(r.x)); }
+    float2   map2D(float id, float n) { float2 r; r.x = trunc(id/n), r.y = id - r.x * n; return r.yx; }
 
     // world to view (unused)
     float4x4 getView( float3 _r, float3 _e) {
-        float3x3 _m = rotZYX(_r);
+        float3x3 _m = rotXYZ(_r);
         return float4x4(
             _m[0], -dot(_m[0],_e),
             _m[1], -dot(_m[1],_e),
@@ -87,8 +92,9 @@ namespace synth
         float zF = 20;
         float zN = 0.01;
         float t  = zN/(zF-zN);
-        float sY = rcp(tan(radians(g_fov*.5)));
+        float sY = rcp(tan(radians(gFov*.5)));
         float sX = sY * BUFFER_HEIGHT * BUFFER_RCP_WIDTH;
+
         return float4x4(sX,0,0,0, 0,sY,0,0, 0,0,-t,t*zF, 0,0,1,0);
     }
 
@@ -101,29 +107,30 @@ namespace synth
     float3 getEye() { return tex2Dfetch(sampEye, int2(1,0)).xyz; }
 
     // roll when holding MMB
-    float3 updRot( float3 rot) 
+    float3 updRot( float3 rot)
     {
-        rot += mul(rotZYX(rot), float3( 
-            gLMB*gDelta.xy, gMMB*atan2(gDelta.y,gDelta.x)) * gFrameTime * gMseSpeed * 0.01 );
-        rot.x %= 2*PI;
-        rot.yz = clamp(rot.yz, float2(0, -PI), PI);
-        return rot;
+        //r = 0;
+        //gMMB*atan2(r.y,r.x);
+        float3 d = float3(gLMB*gDelta, 0) * gFrameTime * gMseSpeed * .0001;
+        //rot += mul(d, rotZXZ(rot));
+        //rot += d;
+
+        rot.xy += d.yx;
+
+        rot.xy %= float2(PI2, PI);
+        rot.z  = ((rot.z + PI) % PI2) - PI;
+        return gReset? 0 : rot;
     }
-    float3 updEye( float3 rot ) 
+    float3 updEye( float3 rot )
     {
-        float3 eye = rotZYX(rot);
-        eye = mul(eye, float3( gRight - gLeft, 0, gBack - gForward)) + float3(0,0, gUp - gDown);
-        return clamp(eye * gFrameTime * 0.01 * gMovSpeed + getEye(), -10, 10);
+        float3 eye = mul(float3(gRight - gLeft, 0, gBack- gForward), rotXYZ(rot))  + float3(0,0, gUp - gDown);
+        return gReset? float3(0,0,2): clamp(eye * gFrameTime * .001 * gMovSpeed + getEye(), -200, 200);
     }
     float4 vs_ctrl( uint vid : SV_VERTEXID ) : SV_POSITION { return float4( vid * 2. - 1.,0,0,1); }
-    float3 ps_upd( float4 vpos : SV_POSITION ) : SV_TARGET
-    {
+    float3 ps_upd( float4 vpos : SV_POSITION ) : SV_TARGET {
         vpos.yzw = getRot(); return vpos.x < 1.? updRot(vpos.yzw) : updEye(vpos.yzw);
     }
-    float3 ps_eye( float4 vpos : SV_POSITION ) : SV_TARGET
-    {
-        return gReset? (vpos.x < 1.? float3(0,PI/2,0) : float3(0,0,1)) : tex2Dfetch(sampTmp,vpos.xy).xyz
-    }
+    float3 ps_eye( float4 vpos : SV_POSITION ) : SV_TARGET { return tex2Dfetch(sampUpd,vpos.xy).xyz; }
 
 /******************************************************************
  *  transforms
@@ -132,9 +139,14 @@ namespace synth
     float4 getPosP(uint vid, out float3 col, out float2 uv) {
         float4 pos;
         pos.xy = map2D(vid, BUFFER_WIDTH);
+        col = tex2Dfetch(sampCol, pos.xy).rgb;
         pos.z  = dot( col = tex2Dfetch(sampCol, pos.xy).rgb, .333); // height by lum
+        //pos.z  = 1;
         pos.w  = 1;
-        uv = pos.xy * float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT); //uv = map2D(vid, 2);
+
+        uv = pos.xy *= float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT); //uv = map2D(vid, 2);
+        pos.xy = pos.xy * 2. - 1.;
+        pos.y *= BUFFER_RCP_WIDTH * BUFFER_HEIGHT;
         return pos;
     }
     float4 transform(float4 vpos) {
@@ -155,22 +167,22 @@ namespace synth
     float4 vs_point(uint vid : SV_VERTEXID, out float3 col : TEXCOORD0) : SV_POSITION {
         float2 _;
         float4 pos = getPosP(vid, col, _), vpos = transform(pos);
-        return vpos.z/vpos.w > tex2Dfetch(sampDep, pos.xy)? float4(0,0,-1,1) : vpos;
+        return vpos;
+        //return vpos.z/vpos.w > tex2Dfetch(sampDep, pos.xy)? float4(0,0,-1,1) : vpos;
     }
-    float4 ps_point( float4 vpos : SV_POSITION, float3 col : TEXCOORD0) : SV_TARGET { return col; }
+    float3 ps_point( float4 vpos : SV_POSITION, float3 col : TEXCOORD0) : SV_TARGET { return col; }
 
 
-    float4 vs_depth_l(uint vid : SV_VERTEXID) : SV_POSITION {
-        float3 _; return transform(getPosL(vid, _, _.xy));
-    }
-    float4 vs_line(uint vid : SV_VERTEXID, out float3 col : TEXCOORD0) : SV_POSITION {
-        float2 _; return transform(getPosL(vid, col, _));
-    }
-    // per pixel depth test
-    float4 ps_line( float4 vpos : SV_POSITION, float3 col : TEXCOORD0) : SV_TARGET { 
-        if(tex2Dfetch(sampDep, vpos.xy) > vpos.z) discard;
-        return col; 
-    }
+    // float4 vs_depth_l(uint vid : SV_VERTEXID) : SV_POSITION {
+    //     float3 _; return transform(getPosL(vid, _, _.xy));
+    // }
+    // float4 vs_line(uint vid : SV_VERTEXID, out float3 col : TEXCOORD0) : SV_POSITION {
+    //     float2 _; return transform(getPosL(vid, col, _));
+    // }
+    // // per pixel depth test
+    // float4 ps_line( float4 vpos : SV_POSITION, float3 col : TEXCOORD0) : SV_TARGET {
+    //     if(tex2Dfetch(sampDep, vpos.xy) > vpos.z) discard; return col;
+    // }
 
 /******************************************************************
  *  technique
@@ -212,23 +224,25 @@ namespace synth
             PixelShader         = ps_line;
         }
     #else
-        pass depth {
-            VertexCount         = BUFFER_WIDTH * BUFFER_HEIGHT;
-            PrimitiveTopology   = POINTLIST;
-            VertexShader        = vs_depth_p;
-            PixelShader         = ps_depth;
+        // pass depth {
+        //     VertexCount         = BUFFER_WIDTH * BUFFER_HEIGHT;
+        //     PrimitiveTopology   = POINTLIST;
+        //     VertexShader        = vs_depth_p;
+        //     PixelShader         = ps_depth;
 
-            ClearRenderTargets  = true;
-            RenderTarget	    = texDep;
-            BlendEnable 	    = true;
-            BlendOp			    = Min;
-            DestBlend		    = ONE;
-        }
+        //     ClearRenderTargets  = true;
+        //     RenderTarget	    = texDep;
+        //     BlendEnable 	    = true;
+        //     BlendOp			    = Min;
+        //     DestBlend		    = ONE;
+        // }
         pass points {
+            ClearRenderTargets  = true;
             VertexCount         = BUFFER_WIDTH * BUFFER_HEIGHT;
             PrimitiveTopology   = POINTLIST;
             VertexShader        = vs_point;
             PixelShader         = ps_point;
+            RenderTargetWriteMask = 7;
         }
     #endif
     }
