@@ -56,20 +56,6 @@ namespace synth
 /******************************************************************
  *  helpers
  ******************************************************************/
-    // float4x4 mWorld() {
-    //     return float4x4( 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1);
-    // }
-    // float4x4 mView() {
-    //     float2 t,p;
-    //     float3 rot = tex2Dfetch(rot_s, 0).rgb;
-    //     float3 eye = tex2Dfetch(eye_s, 0).rgb;
-    //     sincos(rot.x * 6.28 ,t.x,t.y), sincos(-lerp(1.56, 0.1, rot.y),p.x,p.y);
-    //     return mul(mul(
-    //         float4x4( 1,0,0,0, 0,1,0,0, 0,0,-1,g_dist, 0,0,0,1),
-    //         float4x4(1,0,0,0, 0,p.y,-p.x,0, 0,p.x,p.y,0, 0,0,0,1)),
-    //         float4x4(t.y,-t.x,0,0, t.x,t.y,0,0, 0,0,1,0, 0,0,0,1)
-    //     );
-    // }
     float2   sincos(float r) { float2 sc; return sincos(r,sc.x,sc.y), sc; } // sin, cos
     float2   rotR(float2 p, float r) { float2 sc = sincos(r); return mul(float2x2(sc.y,-sc.x,sc), p); }
     float3x3 rotX(float r) { float2 sc = sincos(r); return float3x3( 1,0,0, 0,sc.y,-sc.x, 0,sc.x,sc.y); }
@@ -78,9 +64,27 @@ namespace synth
     float3x3 rotXYZ(float3 r) { return mul(mul(rotZ(r.z),rotY(r.y)),rotX(r.x)); }
     float2   map2D(float id, float n) { float2 r; r.x = trunc(id/n), r.y = id - r.x * n; return r.yx; }
 
-    // world to view (unused)
-    float4x4 getView( float3 _r, float3 _e) {
-        float3x3 _m = rotXYZ(_r);
+    // rotate quaternion a by quaternion b
+    float4 mulQ(float4 a, float b) {
+        const float2 k = float2(1,-1);
+        return mul(a.wxyz, float4x4( b, b.wzyx * k.xyxy, b.zwxy * k.xxyy, b.yxwz * k.yxxy ));
+    }
+    float4 conjQ(float4 q) { return float4(-q.xyz, q.w);}
+
+    float3x3 rot(float4 q) {
+        float n = length(q);
+        q = n==0? 0: ( q * sqrt(2.) / n);
+        float3 W = q.w * q.xyz;
+        float3 X = q.x * q.xyz;
+        float3 Y = q.y * q.xyz;
+        float3 Z = q.z * q.xyz;
+        return float3x3(
+            1 - (Y.y + Z.z), X.y - W.z, X.z + W.y,
+            X.y + W.z, 1 - (X.x + Z.z), Y.z - W.x,
+            X.z - W.y, Y.z + W.x, 1 - (X.x + Y.y)
+        );
+    }
+    float4x4 mView( float3x3 _m, float3 _e) {
         return float4x4(
             _m[0], -dot(_m[0],_e),
             _m[1], -dot(_m[1],_e),
@@ -88,13 +92,14 @@ namespace synth
             0,0,0,1
         );
     }
+    float4x4 mView( float3 _r, float3 _e) { return mView(rotXYZ(_r)); }
+    float4x4 mView( float4 _q, float3 _e) { return mView(rot(_q)); }
     float4x4 mProj() {
         float zF = 20;
         float zN = 0.01;
         float t  = zN/(zF-zN);
         float sY = rcp(tan(radians(gFov*.5)));
         float sX = sY * BUFFER_HEIGHT * BUFFER_RCP_WIDTH;
-
         return float4x4(sX,0,0,0, 0,sY,0,0, 0,0,-t,t*zF, 0,0,1,0);
     }
 
@@ -102,33 +107,29 @@ namespace synth
  *  controls
  ******************************************************************/
 
-    // yaw pitch roll
-    float3 getRot() { return tex2Dfetch(sampEye, int2(0,0)).xyz; }
+    // quaternion
+    float4 getRot() { return tex2Dfetch(sampEye, int2(0,0)); }
     float3 getEye() { return tex2Dfetch(sampEye, int2(1,0)).xyz; }
 
     // roll when holding MMB
-    float3 updRot( float3 rot)
+    float4 updRot( float4 q)
     {
-        //r = 0;
-        //gMMB*atan2(r.y,r.x);
-        float3 d = float3(gLMB*gDelta, 0) * gFrameTime * gMseSpeed * .0001;
-        //rot += mul(d, rotZXZ(rot));
-        //rot += d;
-
-        rot.xy += d.yx;
-
-        rot.xy %= float2(PI2, PI);
-        rot.z  = ((rot.z + PI) % PI2) - PI;
-        return gReset? 0 : rot;
+        float3 d = float3(gLMB*gDelta, gMMB*atan2(r.y,r.x)) * gFrameTime * gMseSpeed * .0001;
+        float3x3 m = transpose(rot(q)); // row[0] = x' axis, row[1] = y' axis, row[2] = z' axis
+        q = mulQ(q, float4(m[1],1) * sincos(d.x*.5).xxxy); // delta x is rotate about y' axis
+        q = mulQ(q, float4(m[0],1) * sincos(d.y*.5).xxxy); // delta y is rotate about x' axis
+        //q = mulQ(q, float4(m[2],1) * sincos(d.z*.5).xxxy); // delta z is rotate about z' axis
+        return gReset? float4(0,sin(PI/2.),0, cos(PI/2.)) :q; // default is rotate about y by 180 degree.
     }
-    float3 updEye( float3 rot )
+    float4 updEye( float4 q )
     {
-        float3 eye = mul(float3(gRight - gLeft, 0, gBack- gForward), rotXYZ(rot))  + float3(0,0, gUp - gDown);
-        return gReset? float3(0,0,2): clamp(eye * gFrameTime * .001 * gMovSpeed + getEye(), -200, 200);
+        // rotate offset from z&x to z' & x'
+        float3 eye = mul(rot(q), float3(gRight - gLeft, 0, gBack- gForward)) + float3(0,0, gUp - gDown);
+        return gReset? float4(0,0,2,0): float4(clamp(eye * gFrameTime * .001 * gMovSpeed + getEye(), -200, 200),0);
     }
     float4 vs_ctrl( uint vid : SV_VERTEXID ) : SV_POSITION { return float4( vid * 2. - 1.,0,0,1); }
-    float3 ps_upd( float4 vpos : SV_POSITION ) : SV_TARGET {
-        vpos.yzw = getRot(); return vpos.x < 1.? updRot(vpos.yzw) : updEye(vpos.yzw);
+    float4 ps_upd( float4 vpos : SV_POSITION ) : SV_TARGET {
+        return vpos.x < 1.? updRot(getRot()) : updEye(getRot());
     }
     float3 ps_eye( float4 vpos : SV_POSITION ) : SV_TARGET { return tex2Dfetch(sampUpd,vpos.xy).xyz; }
 
@@ -139,9 +140,7 @@ namespace synth
     float4 getPosP(uint vid, out float3 col, out float2 uv) {
         float4 pos;
         pos.xy = map2D(vid, BUFFER_WIDTH);
-        col = tex2Dfetch(sampCol, pos.xy).rgb;
         pos.z  = dot( col = tex2Dfetch(sampCol, pos.xy).rgb, .333); // height by lum
-        //pos.z  = 1;
         pos.w  = 1;
 
         uv = pos.xy *= float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT); //uv = map2D(vid, 2);
@@ -150,7 +149,7 @@ namespace synth
         return pos;
     }
     float4 transform(float4 vpos) {
-        return mul(mProj(),mul(getView(getRot() * float3(PI2, PI, PI2), getEye()),vpos));
+        return mul(mProj(),mul(getView(getRot(), getEye()),vpos));
     }
 
 /******************************************************************
