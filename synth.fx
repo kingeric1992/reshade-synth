@@ -89,25 +89,8 @@ namespace synth
     float4 conjQ(float4 q) { return float4(-q.xyz, q.w); }
     static const float3x3 mIdentity = float3x3(1,0,0,0,1,0,0,0,1);
 
-    float3 rotQ(float3 v, float4 q) {
-        //return mulQ(q,mulQ(float4(v,0),conjQ(q))).xyz;
-        //return 2. * dot(q.xyz, v) * q.xyz + (q.w*q.w - dot(q.xyz,q.xyz)) * v + 2. * q.w * cross(q.xyz,v);
-        return v + 2. * cross(q.xyz, cross(q.xyz, v) + q.w * v);
-    }
+    float3 rotQ(float3 v, float4 q) { return v + 2.*cross(q.xyz,cross(q.xyz,v) + q.w*v); }
     float3x3 rot(float4 q) {
-        // float3 _z = rotQ(float3(0,0,1),q);
-        // float3 _x = rotQ(float3(1,0,0),q);
-        // return float3x3( _x, cross(_z,_x), _z);
-        //q *= sign(q.w);
-        // const float2 k = float2(2,-2);
-        // return float3x3(
-        //     dot(q.xw,q.xw*k.xx),dot(q.xw,q.yz*k.xx),dot(q.xw,q.xy*k.xy),
-        //     dot(q.xw,q.yz*k.xy),dot(q.wy,q.wy*k.xx),dot(q.yw,q.zx*k.xx),
-        //     dot(q.xw,q.zy*k.xx),dot(q.yw,q.zx*k.xy),dot(q.wz,q.wz*k.xx)
-        // ) - mIdentity;
-
-        //float4 w = q.w*q, x = q.x*q, y = q.y*q, z = q.z*q;
-        //q /= length(q);
         float xx = q.x*q.x, yy = q.y*q.y, zz = q.z*q.z, ww = q.w*q.w;
         float xy = q.x*q.y, wz = q.w*q.z, xz = q.x*q.z, wy = q.w*q.y;
         float yz = q.y*q.z, wx = q.w*q.x;
@@ -116,16 +99,6 @@ namespace synth
             2.*(xy+wz), ww-xx+yy-zz, 2.*(yz-wx),
             2.*(xz-wy), 2.*(yz+wx), ww-xx-yy+zz
         );
-
-        //q /= q.w; //
-        // float l = dot(q,q);
-        // l = l == 0? 0:(2./l);
-        // float3 W = q.w * q.xyz * l, X = q.x * q.xyz * l, Y = q.y * q.xyz * l, Z = q.z * q.xyz * l;
-        // return transpose(float3x3(
-        //     1.-(Y.y+Z.z), X.y-W.z, X.z+W.y,
-        //     X.y+W.z, 1.-(X.x+Z.z), Y.z-W.x,
-        //     X.z-W.y, Y.z+W.x, 1.-(X.x+Y.y)
-        // ));
     }
     float4x4 mView( float3x3 _m, float3 _e) {
         return float4x4(
@@ -159,20 +132,14 @@ namespace synth
     float4 updRot( float4 q)
     {
         float2 r = gPoint * float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT) * 2. - 1.;
-        float3 d = float3(gLMB*gDelta, /*gMMB*atan2(r.y,r.x)*/ 0);// * gFrameTime * gMseSpeed * .0002;
+        float3 d = float3(gLMB*gDelta, gMMB*length(gDelta));// * gFrameTime * gMseSpeed * .0002;
         d *= gFrameTime * gMseSpeed * 0.0002;
 
-        //float3 p = float3(0,0,1), v = mul(rotX(d.y), mul(rotY(d.x), p ));
-        float l = length(d.xy);
-        if(l > 0)
-            q = normalize(mulQ(q, float4(mul(float3(d.y,-d.x,0)/l,rot(q))*sin(l),cos(l)))); // rotate about normal vector
+        float3x3 m = rot(q);
+        float l = length(d.xy);  // rotate about normal vector
+        if(l > 0) q = normalize(mulQ(q, float4(mul(float3(d.y,-d.x,0)/l,m)*sin(l),cos(l))));
+        q = normalize(mulQ(q, float4(m[2]*sin(d.z),cos(d.z))));
 
-        //q = mulQ(q, float4(1,0,0,1) * sincos(-.2).xxxy);
-
-        //float3x3 m = transpose(rot(q)); // row[0] = x' axis, row[1] = y' axis, row[2] = z' axis
-        //q = mulQ(q, float4(m[1],1) * sincos(d.x).xxxy); // delta x is rotate about y' axis
-        //q = mulQ(q, float4(m[0],1) * sincos(d.y).xxxy); // delta y is rotate about x' axis
-        //q = mulQ(q, float4(m[2],1) * sincos(d.z).xxxy); // delta z is rotate about z' axis
         return q; // default is rotate about y by 180 degree.
     }
     // rotate offset from view space to world space
@@ -181,6 +148,38 @@ namespace synth
         float3 eye = mul(float3(gRight - gLeft, 0, gForward - gBack), rot(q)) + float3(0,0, gUp - gDown);
         return float4(clamp(eye * gFrameTime * .001 * gMovSpeed + getEye(), -200, 200),0);
     }
+
+
+    // arcball
+    float4 updRot(float4 q) {
+        float3 d = float3(gLMB*gDelta, gMMB*length(gDelta)) * gFrameTime * gMseSpeed * .0002;
+        float3 t = float3(gRight - gLeft, gUp - gDown, gForward - gBack) * gFrameTime * .001 * gMovSpeed;
+
+        float3   e = getEye();
+        float3x3 m = transpose(rot(q));
+        float3   v = v[2]/v[2].z * e.z;
+        float    l = length(v);
+
+        return (e-v) - mul(rot(m[0],d.y),mul(rotZ(d.x),v))/l * min(l + t.y, .01) +
+            normalize(float3(m[0].xy,0)) * t.x + normalize(float3(m[2].xy,0)) * t.z;
+    }
+    float4 updEye(float4 q)
+    {
+        float3 d = float3(gLMB*gDelta, gMMB*length(gDelta)) * gFrameTime * gMseSpeed * .0002;
+        float3 t = float3(gRight - gLeft, gUp - gDown, gForward - gBack) * gFrameTime * .001 * gMovSpeed;
+
+        float3   e = getEye();
+        float3x3 m = transpose(rot(q));
+        float3   v = v[2]/v[2].z * e.z;
+        float    l = length(v);
+
+        return (e-v) - mul(rot(m[0],d.y),mul(rotZ(d.x),v))/l * min(l + t.y, .01) +
+            normalize(float3(m[0].xy,0)) * t.x + normalize(float3(m[2].xy,0)) * t.z;
+    }
+
+
+
+
     float4 vs_ctrl( uint vid : SV_VERTEXID ) : SV_POSITION { return float4( vid*2.-1.,0, gOverlay? .5:-.5 ,1); }
     float4 ps_upd( float4 vpos : SV_POSITION ) : SV_TARGET { return vpos.x < 1.? updRot(getRot()):updEye(getRot()); }
     float4 ps_eye( float4 vpos : SV_POSITION ) : SV_TARGET { return tex2Dfetch(sampUpd,vpos.xy); }
