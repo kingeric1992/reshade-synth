@@ -71,15 +71,19 @@ namespace synth
     float3x3 rotZ(float r) { float2 sc = sincos(r); return float3x3( sc.y,-sc.x,0, sc.x,sc.y,0, 0,0,1); }
     float3x3 rotXYZ(float3 r) { return mul(mul(rotZ(r.z),rotY(r.y)),rotX(r.x)); }
     float2   map2D(uint id, uint n) { float2 r; r.x = id/n, r.y = id - r.x * n; return r.yx; }
-
+    // rodrigues rotation about axis with angle
+    float3   rotR(float3 v, float3 a, float r) {
+        float2 sc = sincos(r); return v*sc.y + cross(a,v) * sc.x + a * dot(a,v) * (1. - sc.y);
+    }
+    // rodrigues rotation matrix from axis and angle
+    float3x3 rot(float3 a, float r) {
+        float2  sc = sincos(r);
+        float3x3 i = float3x3( 1,0,0, 0,1,0, 0,0,1);
+        float3x3 k = float3x3( 0, -a.z, a.y, a.z, 0, -a.x, -a.y, a.x, 0 );
+        return i + sc.x * k + (1. - sc.y) * mul(k,k);
+    }
     // rotate quaternion a by quaternion b
     float4 mulQ(float4 a, float4 b) {
-    //     float4 C;
-    //     C.x = a.w*b.x + a.x*b.w + a.y*b.z - a.z*b.y;
-    //     C.y = a.w*b.y - a.x*b.z + a.y*b.w + a.z*b.x;
-    //     C.z = a.w*b.z + a.x*b.y - a.y*b.x + a.z*b.w;
-    //     C.w = a.w*b.w - a.x*b.x - a.y*b.y - a.z*b.z;
-    //     return C;
         return float4( a.w*b.xyz + b.w*a.xyz + cross(a.xyz,b.xyz), a.w*b.w - dot(a.xyz,b.xyz));
     }
     float4 conjQ(float4 q) { return float4(-q.xyz, q.w); }
@@ -94,22 +98,34 @@ namespace synth
         // float3 _z = rotQ(float3(0,0,1),q);
         // float3 _x = rotQ(float3(1,0,0),q);
         // return float3x3( _x, cross(_z,_x), _z);
-
-        const float2 k = float2(2,-2);
-        return float3x3(
-            dot(q.xw,q.xw*k.xx),dot(q.xw,q.yz*k.xx),dot(q.xw,q.xy*k.xy),
-            dot(q.xw,q.yz*k.xy),dot(q.wy,q.wy*k.xx),dot(q.yw,q.zx*k.xx),
-            dot(q.xw,q.zy*k.xx),dot(q.yw,q.zx*k.xy),dot(q.wz,q.wz*k.xx)
-        ) - mIdentity;
-
-        // float l = length(q);
-        // q = l==0.? 0: ( q / l );
-        // float3 W = q.w * q.xyz * 2, X = q.x * q.xyz * 2, Y = q.y * q.xyz * 2, Z = q.z * q.xyz * 2;
+        //q *= sign(q.w);
+        // const float2 k = float2(2,-2);
         // return float3x3(
+        //     dot(q.xw,q.xw*k.xx),dot(q.xw,q.yz*k.xx),dot(q.xw,q.xy*k.xy),
+        //     dot(q.xw,q.yz*k.xy),dot(q.wy,q.wy*k.xx),dot(q.yw,q.zx*k.xx),
+        //     dot(q.xw,q.zy*k.xx),dot(q.yw,q.zx*k.xy),dot(q.wz,q.wz*k.xx)
+        // ) - mIdentity;
+
+        //float4 w = q.w*q, x = q.x*q, y = q.y*q, z = q.z*q;
+        //q /= length(q);
+        float xx = q.x*q.x, yy = q.y*q.y, zz = q.z*q.z, ww = q.w*q.w;
+        float xy = q.x*q.y, wz = q.w*q.z, xz = q.x*q.z, wy = q.w*q.y;
+        float yz = q.y*q.z, wx = q.w*q.x;
+        return float3x3(
+            ww+xx-yy-zz, 2.*(xy-wz), 2.*(xz+wy),
+            2.*(xy+wz), ww-xx+yy-zz, 2.*(yz-wx),
+            2.*(xz-wy), 2.*(yz+wx), ww-xx-yy+zz
+        );
+
+        //q /= q.w; //
+        // float l = dot(q,q);
+        // l = l == 0? 0:(2./l);
+        // float3 W = q.w * q.xyz * l, X = q.x * q.xyz * l, Y = q.y * q.xyz * l, Z = q.z * q.xyz * l;
+        // return transpose(float3x3(
         //     1.-(Y.y+Z.z), X.y-W.z, X.z+W.y,
         //     X.y+W.z, 1.-(X.x+Z.z), Y.z-W.x,
         //     X.z-W.y, Y.z+W.x, 1.-(X.x+Y.y)
-        // );
+        // ));
     }
     float4x4 mView( float3x3 _m, float3 _e) {
         return float4x4(
@@ -121,6 +137,7 @@ namespace synth
     }
     float4x4 mView( float3 _r, float3 _e) { return mView(rotXYZ(_r), _e); }
     float4x4 mView( float4 _q, float3 _e) { return mView(rot(_q), _e); }
+    float4x4 mView( float3 _a, float _r, float3 _e) { return mView(rot(_a,_r), _e); }
     float4x4 mProj() {
         float zF = 10;
         float zN = 0.001;
@@ -138,8 +155,6 @@ namespace synth
     float4 getRot() { return tex2Dfetch(sampEye, int2(0,0)); }
     float3 getEye() { return tex2Dfetch(sampEye, int2(1,0)).xyz; }
 
-    uniform float gAngle <ui_type="slider"; ui_min=-10; ui_max=10;> = 0;
-
     // roll when holding MMB
     float4 updRot( float4 q)
     {
@@ -150,29 +165,17 @@ namespace synth
         //float3 p = float3(0,0,1), v = mul(rotX(d.y), mul(rotY(d.x), p ));
 
         //d.xy = float2(d.y, -d.x);
-        //float l = length(d.xy);
 
-        //q = mulQ(q, )
-        //if(l > 0)
-            //q = mulQ(q, float4(d/l * sin(l), cos(l)));
 
-        float3x3 m = transpose(rot(q)); // row[0] = x' axis, row[1] = y' axis, row[2] = z' axis
-        //if(l > 0)
-        //q = mulQ(q, float4(  mul( float3(d.y, -d.x, 0)/l, rot(q) ) ,1) * sincos(l).xxxy);
 
-        // same axis
-        //float  l = length(q.xyz);
-        //q.xyz = float3(1,0,0);
+        float l = length(d.xy);
+        q = mulQ(q, float4(mul(float3(d.y,-d.x,0)/l, rot(q)), 1) * sincos(l).xxxy); // rotate about normal vector
         //q =  float4(1,0,0,1) * rotR(float2(l,q.w),.1).xxxy; //mulQ(q, float4(1,0,0,1) * sincos(-.2).xxxy);
-        //q = float4(0,0,1,1) * sincos(gTimer*0.001).xxxy;
-        //float l = rsqrt(dot(q,q));
-        q = mulQ(q, float4(1,0,0,1) * sincos(.2).xxxy) ;
-        //q /= sqrt(dot(q,q));
-        //q = float4(1,0,0,1) * sincos(gAngle*PI).xxxy;
 
-        //q = mulQ(q, float4(rsqrt(2.).xx,0,1) * sincos(-.01).xxxy); // delta x is rotate about y' axis
+        //float3x3 m = transpose(rot(q)); // row[0] = x' axis, row[1] = y' axis, row[2] = z' axis
+        //q = mulQ(q, float4(m[1],1) * sincos(d.x).xxxy); // delta x is rotate about y' axis
         //q = mulQ(q, float4(m[0],1) * sincos(d.y).xxxy); // delta y is rotate about x' axis
-        //q = mulQ(q, float4(m[2],1) * sincos(d.x).xxxy); // delta z is rotate about z' axis
+        //q = mulQ(q, float4(m[2],1) * sincos(d.z).xxxy); // delta z is rotate about z' axis
         return q; // default is rotate about y by 180 degree.
     }
     // rotate offset from view space to world space
@@ -183,9 +186,9 @@ namespace synth
     }
     float4 vs_ctrl( uint vid : SV_VERTEXID ) : SV_POSITION { return float4( vid*2.-1.,0, gOverlay? .5:-.5 ,1); }
     float4 ps_upd( float4 vpos : SV_POSITION ) : SV_TARGET { return vpos.x < 1.? updRot(getRot()):updEye(getRot()); }
-    float3 ps_eye( float4 vpos : SV_POSITION ) : SV_TARGET { return tex2Dfetch(sampUpd,vpos.xy).xyz; }
+    float4 ps_eye( float4 vpos : SV_POSITION ) : SV_TARGET { return tex2Dfetch(sampUpd,vpos.xy); }
     float4 ps_init( float4 vpos : SV_POSITION ) : SV_TARGET { return vpos.x < 1.
-        ? float4(1,0,0,1) * sincos(PI*.5).xxxy : float4(0,0,2,0);
+        ? float4(1,0,0,1) * sincos(PI/2).xxxy : float4(0,0,2,0);
     }
 
 /******************************************************************
