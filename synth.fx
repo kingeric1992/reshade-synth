@@ -129,9 +129,9 @@ namespace synth
     }
     float4x4 mView( float3x3 _m, float3 _e) {
         return float4x4(
-            _m[0], _e.x,//-dot(_m[0],_e),
-            _m[1], _e.y,//-dot(_m[1],_e),
-            _m[2], _e.z,//-dot(_m[2],_e),
+            _m[0], -dot(_m[0],_e),
+            _m[1], -dot(_m[1],_e),
+            _m[2], -dot(_m[2],_e),
             0,0,0,1
         );
     }
@@ -160,17 +160,14 @@ namespace synth
     {
         float2 r = gPoint * float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT) * 2. - 1.;
         float3 d = float3(gLMB*gDelta, /*gMMB*atan2(r.y,r.x)*/ 0);// * gFrameTime * gMseSpeed * .0002;
-        d *= gFrameTime * gMseSpeed * 0.001;
+        d *= gFrameTime * gMseSpeed * 0.0002;
 
         //float3 p = float3(0,0,1), v = mul(rotX(d.y), mul(rotY(d.x), p ));
-
-        //d.xy = float2(d.y, -d.x);
-
-
-
         float l = length(d.xy);
-        q = mulQ(q, float4(mul(float3(d.y,-d.x,0)/l, rot(q)), 1) * sincos(l).xxxy); // rotate about normal vector
-        //q =  float4(1,0,0,1) * rotR(float2(l,q.w),.1).xxxy; //mulQ(q, float4(1,0,0,1) * sincos(-.2).xxxy);
+        if(l > 0)
+            q = normalize(mulQ(q, float4(mul(float3(d.y,-d.x,0)/l,rot(q))*sin(l),cos(l)))); // rotate about normal vector
+
+        //q = mulQ(q, float4(1,0,0,1) * sincos(-.2).xxxy);
 
         //float3x3 m = transpose(rot(q)); // row[0] = x' axis, row[1] = y' axis, row[2] = z' axis
         //q = mulQ(q, float4(m[1],1) * sincos(d.x).xxxy); // delta x is rotate about y' axis
