@@ -95,27 +95,27 @@ namespace synth
         // float3 _x = rotQ(float3(1,0,0),q);
         // return float3x3( _x, cross(_z,_x), _z);
 
-        // const float2 k = float2(2,-2);
-        // return float3x3(
-        //     dot(q.xw,q.xw*k.xx),dot(q.xw,q.yz*k.xx),dot(q.xw,q.xy*k.xy),
-        //     dot(q.xw,q.yz*k.xy),dot(q.wy,q.wy*k.xx),dot(q.yw,q.zx*k.xx),
-        //     dot(q.xw,q.zy*k.xx),dot(q.yw,q.zx*k.xy),dot(q.wz,q.wz*k.xx)
-        // ) - mIdentity;
-
-        float l = length(q);
-        q = l==0.? 0: ( q / l );
-        float3 W = q.w * q.xyz * 2, X = q.x * q.xyz * 2, Y = q.y * q.xyz * 2, Z = q.z * q.xyz * 2;
+        const float2 k = float2(2,-2);
         return float3x3(
-            1.-(Y.y+Z.z), X.y-W.z, X.z+W.y,
-            X.y+W.z, 1.-(X.x+Z.z), Y.z-W.x,
-            X.z-W.y, Y.z+W.x, 1.-(X.x+Y.y)
-        );
+            dot(q.xw,q.xw*k.xx),dot(q.xw,q.yz*k.xx),dot(q.xw,q.xy*k.xy),
+            dot(q.xw,q.yz*k.xy),dot(q.wy,q.wy*k.xx),dot(q.yw,q.zx*k.xx),
+            dot(q.xw,q.zy*k.xx),dot(q.yw,q.zx*k.xy),dot(q.wz,q.wz*k.xx)
+        ) - mIdentity;
+
+        // float l = length(q);
+        // q = l==0.? 0: ( q / l );
+        // float3 W = q.w * q.xyz * 2, X = q.x * q.xyz * 2, Y = q.y * q.xyz * 2, Z = q.z * q.xyz * 2;
+        // return float3x3(
+        //     1.-(Y.y+Z.z), X.y-W.z, X.z+W.y,
+        //     X.y+W.z, 1.-(X.x+Z.z), Y.z-W.x,
+        //     X.z-W.y, Y.z+W.x, 1.-(X.x+Y.y)
+        // );
     }
     float4x4 mView( float3x3 _m, float3 _e) {
         return float4x4(
-            _m[0], -dot(_m[0],_e),
-            _m[1], -dot(_m[1],_e),
-            _m[2], -dot(_m[2],_e),
+            _m[0], _e.x,//-dot(_m[0],_e),
+            _m[1], _e.y,//-dot(_m[1],_e),
+            _m[2], _e.z,//-dot(_m[2],_e),
             0,0,0,1
         );
     }
@@ -137,6 +137,8 @@ namespace synth
     // quaternion
     float4 getRot() { return tex2Dfetch(sampEye, int2(0,0)); }
     float3 getEye() { return tex2Dfetch(sampEye, int2(1,0)).xyz; }
+
+    uniform float gAngle <ui_type="slider"; ui_min=-10; ui_max=10;> = 0;
 
     // roll when holding MMB
     float4 updRot( float4 q)
@@ -162,11 +164,11 @@ namespace synth
         //float  l = length(q.xyz);
         //q.xyz = float3(1,0,0);
         //q =  float4(1,0,0,1) * rotR(float2(l,q.w),.1).xxxy; //mulQ(q, float4(1,0,0,1) * sincos(-.2).xxxy);
-        //q = float4(1,0,0,1) * sincos(gTimer*0.001).xxxy;
+        //q = float4(0,0,1,1) * sincos(gTimer*0.001).xxxy;
         //float l = rsqrt(dot(q,q));
-        q = mulQ(normalize(q), float4(1,0,0,1) * sincos(.5).xxxy) ;
+        q = mulQ(q, float4(1,0,0,1) * sincos(.2).xxxy) ;
         //q /= sqrt(dot(q,q));
-
+        //q = float4(1,0,0,1) * sincos(gAngle*PI).xxxy;
 
         //q = mulQ(q, float4(rsqrt(2.).xx,0,1) * sincos(-.01).xxxy); // delta x is rotate about y' axis
         //q = mulQ(q, float4(m[0],1) * sincos(d.y).xxxy); // delta y is rotate about x' axis
