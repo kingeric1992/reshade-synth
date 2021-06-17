@@ -84,7 +84,7 @@ namespace synth
         float3x3 k = float3x3( 0, -a.z, a.y, a.z, 0, -a.x, -a.y, a.x, 0 );
         return i + sc.x * k + (1. - sc.y) * mul(k,k);
     }
-    float4 quat(float3 a, float r) { return r/=2, float4(a*sin(r),cos(r)); }
+    float4 quat(float3 a, float r) { r/=2.; return float4(a*sin(r),cos(r)); }
     // rotate quaternion a by quaternion b
     float4 mulQ(float4 a, float4 b) {
         return float4( a.w*b.xyz + b.w*a.xyz + cross(a.xyz,b.xyz), a.w*b.w - dot(a.xyz,b.xyz));
@@ -111,9 +111,9 @@ namespace synth
             0,0,0,1
         );
     }
-    float4x4 mView( float3 _r, float3 _e) { return mView(rotXYZ(_r), _e); }
+    //float4x4 mView( float3 _r, float3 _e) { return mView(rotXYZ(_r), _e); }
     float4x4 mView( float4 _q, float3 _e) { return mView(rot(_q), _e); }
-    float4x4 mView( float3 _a, float _r, float3 _e) { return mView(rot(_a,_r), _e); }
+    //float4x4 mView( float3 _a, float _r, float3 _e) { return mView(rot(_a,_r), _e); }
     float4x4 mProj() {
         float zF = 10;
         float zN = 0.001;
@@ -129,11 +129,10 @@ namespace synth
 
     // quaternion
     float4 getRot() { return tex2Dfetch(sampEye, int2(0,0)); }
-    float3 getEye() { return tex2Dfetch(sampEye, int2(1,0)).xyz; }
+    float4 getEye() { return tex2Dfetch(sampEye, int2(1,0)); }
 
 
-#ifndef ARCBALL
-    // roll when holding MMB
+#ifndef ARCBALL // roll when holding MMB
     float4 updRot()
     {
         float4   q = getRot();
@@ -152,51 +151,46 @@ namespace synth
     // rotate offset from view space to world space
     float4 updEye()
     {
-        float4 q   = getRot();
-        float3 eye = mul(float3(gRight - gLeft, 0, gForward - gBack), rot(q)) + float3(0,0, gUp - gDown);
-        return float4(clamp(eye * gFrameTime * .001 * gMovSpeed + getEye(), -10, 10),0);
+        float3 eye = mul(float3(gRight - gLeft, 0, gForward - gBack), rot(updRot())) + float3(0,0, gUp - gDown);
+        return float4(clamp(eye * gFrameTime * .001 * gMovSpeed + getEye().xyz, -10, 10),0);
     }
 #else // arcball
     float4 updRot() {
-        float3   d = float3(gLMB*gDelta, gHand*length(gDelta)) * gFrameTime * gMseSpeed * .0002;
+        float3   d = float3(gLMB*gDelta, gHand*gDelta.x) * gFrameTime * gMseSpeed * .0002;
         float4   q = getRot();
-        float3x3 m = transpose(rot(q));
+        float3x3 m = rot(q);
         float2   l = float2(length(m[2].xy), length(m[0].xy));
-        float3   n = l.x > l.y? float3(m[2].y,-m[2].x,0)/l.x : float3(m[0].xy,0)/l.y;
+        float3   n = l.y > 0.? float3(m[0].xy/l.y,0):float3(m[2].y,-m[2].x,0)/l.x;
 
-        q = mulQ(q, quat(float3(0,0,1),-d.x)); // rotate about world z by dx
-        q = mulQ(q, quat(n,            -d.y)); // rotate about normal by dy
-        q = mulQ(q, quat(m[2],          d.z)); // rotate about local z by dz
+        q = mulQ(q, quat(float3(0,0,1),d.x)); // rotate about world z by dx
+        q = mulQ(q, quat(n,            d.y)); // rotate about normal by dy
+        q = mulQ(q, quat(m[2],         d.z)); // rotate about local z by dz
         return normalize(q); // renormalize to reduce accumelative error
     }
     float4 updEye()
     {
-        float3   d = float3(gLMB*gDelta, gHand*length(gDelta)) * gFrameTime * gMseSpeed * .0002;
         float3   s = float3(gRight - gLeft, gUp - gDown, gForward - gBack) * gFrameTime * .001 * gMovSpeed;
-        float4   q = getRot();
-        float3   e = getEye();
-        float3x3 m = transpose(rot(q)); // x-axis, y-axis, z-axis
-        float3   v = m[2]/m[2].z * e.z; // point to eye
-        float3   l = float3(length(m[2].xy), length(m[0].xy), length(v));
-        float3   n = l.x > l.y? float3(m[2].y,-m[2].x,0)/l.x : float3(m[0].xy,0)/l.y; // select proper normal
+        float4   e = getEye();
+        float3x3 m = rot(updRot()); // x-axis, y-axis, z-axis
+        float2   l = float2(length(m[2].xy), length(m[0].xy));
+        float3   n = l.y > 0.? float3(m[0].xy/l.y,0):float3(m[2].y,-m[2].x,0)/l.x;
         float3   t = float3(n.y,-n.x,0);
-        float3   p = rotQ(rotQ(v/l.z, quat(float3(0,0,1), d.x)),quat(n,d.y)); // quaternion rot
-
-        //return float4(e,0);
-        return float4((e-v) + p*clamp(l.z + s.y,.01,10) + n*s.x + t*s.z, 0); // move pivot point by wasd, dist by ctrl/space
+        float    d = clamp(e.w + s.y, .01, 10);
+        return float4(e.xyz + rot(getRot())[2]*e.w - m[2]*d + n*s.x + t*s.z, d); // move pivot point by wasd, dist by ctrl/space
+        //return e;
     }
 #endif
     float4 vs_ctrl( uint vid : SV_VERTEXID ) : SV_POSITION { return float4( vid*2.-1.,0, gOverlay? .5:-.5 ,1); }
     float4 ps_upd( float4 vpos : SV_POSITION ) : SV_TARGET { return vpos.x < 1.? updRot():updEye(); }
     float4 ps_eye( float4 vpos : SV_POSITION ) : SV_TARGET { return tex2Dfetch(sampUpd,vpos.xy); }
     float4 ps_init( float4 vpos : SV_POSITION ) : SV_TARGET { return vpos.x < 1.
-        ? float4(1,0,0,1) * sincos(PI/2).xxxy : float4(0,0,2,0);
+        ? float4(sin(PI/2),0,0,cos(PI/2)) : float4(0,0,2,2);
     }
 
 /******************************************************************
  *  transforms
  ******************************************************************/
-    float4 transform(float4 vpos) { return mul(mProj(),mul(mView(getRot(),getEye()),vpos)); }
+    float4 transform(float4 vpos) { return mul(mProj(),mul(mView(getRot(),getEye().xyz),vpos)); }
 
     // point generation
     float4 getPosP(uint vid, out float4 col, out float2 uv) {
@@ -236,35 +230,28 @@ namespace synth
  ******************************************************************/
 
     // depth map
-    float4 vs_depth_p(uint vid : SV_VERTEXID) : SV_POSITION {
-        float4 _; return transform(getPosP(vid, _, _.xy));
+    float4 vs_pointD(uint vid : SV_VERTEXID, out float4 col : TEXCOORD) : SV_POSITION {
+        float2 _; return transform(getPosP(vid, col, _));
     }
-    // culling points in vs to stop ps init
-    // comparing screenspace z (clip.z / clip.w) with depth buffer
-    float4 vs_point(uint vid : SV_VERTEXID, out float4 col : TEXCOORD0) : SV_POSITION {
-        float2 _;
-        float4 pos = getPosP(vid, col, _), vpos = transform(pos);
-        return vpos;
-        //return vpos.z/vpos.w > tex2Dfetch(sampDep, pos.xy)? float4(0,0,-1,1) : vpos;
+    float4 vs_point(uint vid : SV_VERTEXID, out float4 col : TEXCOORD) : SV_POSITION {
+        float2 _; return transform(getPosP(vid, col, _));
     }
-    float4 ps_point( float4 vpos : SV_POSITION, float4 col : TEXCOORD0) : SV_TARGET { return col; }
-
-
-    float4 vs_depth_l(uint vid : SV_VERTEXID) : SV_POSITION {
-        float4 _; return transform(getPosL(vid, _, _.xy));
-    }
-    float4 vs_line(uint vid : SV_VERTEXID, out float4 col : TEXCOORD0) : SV_POSITION {
+    float4 vs_lineD(uint vid : SV_VERTEXID, out float4 col : TEXCOORD) : SV_POSITION {
         float2 _; return transform(getPosL(vid, col, _));
     }
-    // per pixel depth test. would alpha blend faster then discard?
-    float4 ps_line( float4 vpos : SV_POSITION, float4 col : TEXCOORD0) : SV_TARGET {
-        return /*(col.a = tex2Dfetch(sampDep, vpos.xy) > vpos.z? 0:col.a), */ col;
+    float4 vs_line(uint vid : SV_VERTEXID, out float4 col : TEXCOORD) : SV_POSITION {
+        float2 _; return transform(getPosL(vid, col, _));
     }
 
+    // per pixel depth test. would alpha blend faster then discard?
+    float4 ps_draw( float4 vpos : SV_POSITION, float4 col : TEXCOORD0) : SV_TARGET {
+        return col.a *= vpos.z >= tex2Dfetch(sampDep, vpos.xy).x, col;
+    }
     // write screenspace z to depth buffer
     // SV_POSITION z component is screenspace z (clip.z / clip.w), w component is clipspace w (clip.w).
-    float  ps_depth( float4 vpos : SV_POSITION ) : SV_TARGET { return vpos.z; }
-
+    float  ps_depth( float4 vpos : SV_POSITION, float4 col : TEXCOORD ) : SV_TARGET {
+        if(col.a < .01) discard; else return vpos.z;
+    }
 /******************************************************************
  *  technique
  ******************************************************************/
@@ -296,48 +283,48 @@ namespace synth
             RenderTarget        = texEye;
         }
     #ifdef LINES
-        // pass depth {
-        //     VertexCount         = (LINESEG + 2) * LINEROW;
-        //     PrimitiveTopology   = LINESTRIP;
-        //     VertexShader        = vs_depth_l;
-        //     PixelShader         = ps_depth;
+        pass depth {
+            VertexCount             = (LINESEG + 3) * LINEROW;
+            PrimitiveTopology       = LINESTRIP;
+            VertexShader            = vs_lineD;
+            PixelShader             = ps_depth;
 
-        //     ClearRenderTargets  = true;
-        //     RenderTarget	    = texDep;
-        //     BlendEnable 	    = true;
-        //     BlendOp			    = Min;
-        //     DestBlend		    = ONE;
-        // }
+            ClearRenderTargets      = true;
+            RenderTarget	        = texDep;
+            BlendEnable 	        = true;
+            BlendOp			        = Max;
+            DestBlend		        = ONE;
+        }
         pass lines {
             ClearRenderTargets      = true;
             VertexCount             = (LINESEG + 3) * LINEROW;
             PrimitiveTopology       = LINESTRIP;
             VertexShader            = vs_line;
-            PixelShader             = ps_line;
+            PixelShader             = ps_draw;
             BlendEnable             = true;
             SrcBlend                = SRCALPHA;
             DestBlend               = INVSRCALPHA;
             RenderTargetWriteMask   = 7;
         }
     #else
-        // pass depth {
-        //     VertexCount         = BUFFER_WIDTH * BUFFER_HEIGHT;
-        //     PrimitiveTopology   = POINTLIST;
-        //     VertexShader        = vs_depth_p;
-        //     PixelShader         = ps_depth;
+        pass depth {
+            VertexCount             = BUFFER_WIDTH * BUFFER_HEIGHT;
+            PrimitiveTopology       = POINTLIST;
+            VertexShader            = vs_pointD;
+            PixelShader             = ps_depth;
 
-        //     ClearRenderTargets  = true;
-        //     RenderTarget	    = texDep;
-        //     BlendEnable 	    = true;
-        //     BlendOp			    = Min;
-        //     DestBlend		    = ONE;
-        // }
+            ClearRenderTargets      = true;
+            RenderTarget	        = texDep;
+            BlendEnable 	        = true;
+            BlendOp			        = Max;
+            DestBlend		        = ONE;
+        }
         pass points {
             ClearRenderTargets      = true;
             VertexCount             = BUFFER_WIDTH * BUFFER_HEIGHT;
             PrimitiveTopology       = POINTLIST;
             VertexShader            = vs_point;
-            PixelShader             = ps_point;
+            PixelShader             = ps_draw;
             BlendEnable             = true;
             SrcBlend                = SRCALPHA;
             DestBlend               = INVSRCALPHA;
