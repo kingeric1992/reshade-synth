@@ -8,7 +8,8 @@
 
 #include "macro_vk.fxh"
 
-#define LINES
+#define ARCBALL
+//#define LINES
 #define LINESEG  240 //(BUFFER_WIDTH - 1)
 #define LINEROW  180 //(BUFFER_HEIGHT)
 
@@ -31,6 +32,7 @@ namespace synth
     uniform bool    gRight      < source="key"; keycode = VK_D;>;
     uniform bool    gUp         < source="key"; keycode = VK_SPACE;>;
     uniform bool    gDown       < source="key"; keycode = VK_CONTROL;>;
+    uniform bool    gHand       < source="key"; keycode = VK_H;>;
 
     uniform float   gLMB        < source="mousebutton"; keycode = 0x00;>; //LMB
     uniform float   gRMB        < source="mousebutton"; keycode = 0x01;>; //RMB
@@ -82,6 +84,7 @@ namespace synth
         float3x3 k = float3x3( 0, -a.z, a.y, a.z, 0, -a.x, -a.y, a.x, 0 );
         return i + sc.x * k + (1. - sc.y) * mul(k,k);
     }
+    float4 quat(float3 a, float r) { return r/=2, float4(a*sin(r),cos(r)); }
     // rotate quaternion a by quaternion b
     float4 mulQ(float4 a, float4 b) {
         return float4( a.w*b.xyz + b.w*a.xyz + cross(a.xyz,b.xyz), a.w*b.w - dot(a.xyz,b.xyz));
@@ -128,60 +131,63 @@ namespace synth
     float4 getRot() { return tex2Dfetch(sampEye, int2(0,0)); }
     float3 getEye() { return tex2Dfetch(sampEye, int2(1,0)).xyz; }
 
+
+#ifndef ARCBALL
     // roll when holding MMB
-    float4 updRot( float4 q)
+    float4 updRot()
     {
-        float2 r = gPoint * float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT) * 2. - 1.;
-        float3 d = float3(gLMB*gDelta, gMMB*length(gDelta));// * gFrameTime * gMseSpeed * .0002;
-        d *= gFrameTime * gMseSpeed * 0.0002;
-
+        float4   q = getRot();
+        float2   r = gPoint * float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT) * 2. - 1.;
+        float3   d = float3(gLMB*gDelta, gHand*gDelta.x) * gFrameTime * gMseSpeed * .0002;
         float3x3 m = rot(q);
-        float l = length(d.xy);  // rotate about normal vector
-        if(l > 0) q = normalize(mulQ(q, float4(mul(float3(d.y,-d.x,0)/l,m)*sin(l),cos(l))));
-        q = normalize(mulQ(q, float4(m[2]*sin(d.z),cos(d.z))));
 
-        return q; // default is rotate about y by 180 degree.
+        //float    l = length(d.xy);
+        //if(l > 0) q = mulQ(q, quat(mul(float3(d.y,-d.x,0)/l,m), l)); // transform local normal to world normal.
+
+        q = mulQ(q, quat(m[1],d.x));    // rotate about local y by dx
+        q = mulQ(q, quat(m[0],d.y));    // rotate about local x by dy
+        q = mulQ(q, quat(m[2],d.z));    // rotate about local z by dz
+        return normalize(q);            // renormalize to reduce accumelative error
     }
     // rotate offset from view space to world space
-    float4 updEye( float4 q )
+    float4 updEye()
     {
+        float4 q   = getRot();
         float3 eye = mul(float3(gRight - gLeft, 0, gForward - gBack), rot(q)) + float3(0,0, gUp - gDown);
-        return float4(clamp(eye * gFrameTime * .001 * gMovSpeed + getEye(), -200, 200),0);
+        return float4(clamp(eye * gFrameTime * .001 * gMovSpeed + getEye(), -10, 10),0);
     }
-
-
-    // arcball
-    float4 updRot(float4 q) {
-        float3 d = float3(gLMB*gDelta, gMMB*length(gDelta)) * gFrameTime * gMseSpeed * .0002;
-        float3 t = float3(gRight - gLeft, gUp - gDown, gForward - gBack) * gFrameTime * .001 * gMovSpeed;
-
-        float3   e = getEye();
+#else // arcball
+    float4 updRot() {
+        float3   d = float3(gLMB*gDelta, gHand*length(gDelta)) * gFrameTime * gMseSpeed * .0002;
+        float4   q = getRot();
         float3x3 m = transpose(rot(q));
-        float3   v = v[2]/v[2].z * e.z;
-        float    l = length(v);
+        float2   l = float2(length(m[2].xy), length(m[0].xy));
+        float3   n = l.x > l.y? float3(m[2].y,m[2].x,0)/l.x : m[0]/l.y;
 
-        return (e-v) - mul(rot(m[0],d.y),mul(rotZ(d.x),v))/l * min(l + t.y, .01) +
-            normalize(float3(m[0].xy,0)) * t.x + normalize(float3(m[2].xy,0)) * t.z;
+        q = mulQ(q, quat(float3(0,0,1), -d.x)); // rotate about world z by dx
+        q = mulQ(q, quat(n,             -d.y)); // rotate about normal by dy
+        q = mulQ(q, quat(m[2],          d.z)); // rotate about local z by dz
+        return normalize(q); // renormalize to reduce accumelative error
     }
-    float4 updEye(float4 q)
+    float4 updEye()
     {
-        float3 d = float3(gLMB*gDelta, gMMB*length(gDelta)) * gFrameTime * gMseSpeed * .0002;
-        float3 t = float3(gRight - gLeft, gUp - gDown, gForward - gBack) * gFrameTime * .001 * gMovSpeed;
-
+        float3   d = float3(gLMB*gDelta, gHand*length(gDelta)) * gFrameTime * gMseSpeed * .0002;
+        float3   s = float3(gRight - gLeft, gUp - gDown, gForward - gBack) * gFrameTime * .001 * gMovSpeed;
+        float4   q = getRot();
         float3   e = getEye();
         float3x3 m = transpose(rot(q));
-        float3   v = v[2]/v[2].z * e.z;
-        float    l = length(v);
+        float3   v = m[2]/m[2].z * e.z;
+        float3   l = float3(length(m[2].xy), length(m[0].xy), length(v));
+        float3   n = l.x > l.y? float3(m[2].y,m[2].x,0)/l.x : m[0]/l.y; // select proper normal
+        float3   t = normalize(float3(m[2].xy,0));
+        float3   p = rotQ(rotQ(v/l.z, quat(float3(0,0,1), d.x)),quat(n,d.y)); // quaternion rot
 
-        return (e-v) - mul(rot(m[0],d.y),mul(rotZ(d.x),v))/l * min(l + t.y, .01) +
-            normalize(float3(m[0].xy,0)) * t.x + normalize(float3(m[2].xy,0)) * t.z;
+        //return float4(e,0);
+        return float4((e-v) + p*clamp(l.z + s.y,.01,10) + n*s.x + t*s.z, 0); // move pivot point by wasd, dist by ctrl/space
     }
-
-
-
-
+#endif
     float4 vs_ctrl( uint vid : SV_VERTEXID ) : SV_POSITION { return float4( vid*2.-1.,0, gOverlay? .5:-.5 ,1); }
-    float4 ps_upd( float4 vpos : SV_POSITION ) : SV_TARGET { return vpos.x < 1.? updRot(getRot()):updEye(getRot()); }
+    float4 ps_upd( float4 vpos : SV_POSITION ) : SV_TARGET { return vpos.x < 1.? updRot():updEye(); }
     float4 ps_eye( float4 vpos : SV_POSITION ) : SV_TARGET { return tex2Dfetch(sampUpd,vpos.xy); }
     float4 ps_init( float4 vpos : SV_POSITION ) : SV_TARGET { return vpos.x < 1.
         ? float4(1,0,0,1) * sincos(PI/2).xxxy : float4(0,0,2,0);
