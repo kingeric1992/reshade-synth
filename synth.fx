@@ -162,10 +162,10 @@ namespace synth
         float4   q = getRot();
         float3x3 m = transpose(rot(q));
         float2   l = float2(length(m[2].xy), length(m[0].xy));
-        float3   n = l.x > l.y? float3(m[2].y,m[2].x,0)/l.x : m[0]/l.y;
+        float3   n = l.x > l.y? float3(m[2].y,-m[2].x,0)/l.x : float3(m[0].xy,0)/l.y;
 
-        q = mulQ(q, quat(float3(0,0,1), -d.x)); // rotate about world z by dx
-        q = mulQ(q, quat(n,             -d.y)); // rotate about normal by dy
+        q = mulQ(q, quat(float3(0,0,1),-d.x)); // rotate about world z by dx
+        q = mulQ(q, quat(n,            -d.y)); // rotate about normal by dy
         q = mulQ(q, quat(m[2],          d.z)); // rotate about local z by dz
         return normalize(q); // renormalize to reduce accumelative error
     }
@@ -175,11 +175,11 @@ namespace synth
         float3   s = float3(gRight - gLeft, gUp - gDown, gForward - gBack) * gFrameTime * .001 * gMovSpeed;
         float4   q = getRot();
         float3   e = getEye();
-        float3x3 m = transpose(rot(q));
-        float3   v = m[2]/m[2].z * e.z;
+        float3x3 m = transpose(rot(q)); // x-axis, y-axis, z-axis
+        float3   v = m[2]/m[2].z * e.z; // point to eye
         float3   l = float3(length(m[2].xy), length(m[0].xy), length(v));
-        float3   n = l.x > l.y? float3(m[2].y,m[2].x,0)/l.x : m[0]/l.y; // select proper normal
-        float3   t = normalize(float3(m[2].xy,0));
+        float3   n = l.x > l.y? float3(m[2].y,-m[2].x,0)/l.x : float3(m[0].xy,0)/l.y; // select proper normal
+        float3   t = float3(n.y,-n.x,0);
         float3   p = rotQ(rotQ(v/l.z, quat(float3(0,0,1), d.x)),quat(n,d.y)); // quaternion rot
 
         //return float4(e,0);
