@@ -201,10 +201,16 @@ namespace synth
     float4 transform(float4 p) { return mul(mProj(),mul(mView(getRot(),getEye().xyz),p)); }
     float trig( float t ) { return abs(frac(t) * 2. - 1.) * 2. - 1.; }
 
+    uniform uint  gMode     <ui_type="radio"; ui_items="planer\0cylinder\0sphere\0wave";> = 0;
     uniform float gRadius   <ui_type="slider"; ui_min=1;  ui_max=10;> = 3.;
     uniform float gWaveFreq <ui_type="slider"; ui_min=-5; ui_max=5; > = 1;
     uniform float gWaveLen  <ui_type="slider"; ui_min=.01;ui_max=5; > = .2;
-    uniform float gWaveAmp  <ui_type="slider"; ui_min=-1; ui_max=1; > = .2; 
+    uniform float gWaveAmp  <ui_type="slider"; ui_min=-1; ui_max=1; > = .2;
+
+    #define PLANER      0
+    #define CYLINDER    1
+    #define SPHERE      2
+    #define PERIODIC    3
 
     // input norm pos <- [1,-1]
     float4 posMod(float3 norm) {
@@ -213,23 +219,13 @@ namespace synth
         // without orientation change.
         // all surface shift to z=0;
         switch(gMode) {
-            
-            case PLANER : {
-                pos.xyz = norm;
-            } break;
-
-            case CYLINDER : {
-                pos.xyz = normalize(float3(sin(norm.x),0,gRadius)) * (gRadius + norm.z) + float3(0, norm.y,-gRadius);
-            } break;
-
-            case SPHERE : {
-                pos.xyz = normalize(float3(sin(norm.xy),gRadius)) * (gRadius + norm.z) - float3(0,0,gRadius);
-            } break;
-
+            case PLANER :   pos.xyz = norm; break;
+            case CYLINDER : pos.xyz = normalize(float3(sin(norm.x),0,gRadius)) * (gRadius + norm.z) + float3(0, norm.y,-gRadius); break;
+            case SPHERE :   pos.xyz = normalize(float3(sin(norm.xy),gRadius)) * (gRadius + norm.z) - float3(0,0,gRadius); break;
             case PERIODIC : {
-                float t = norm.x/gWaveLen + gTimer*.001*gWaveFreq;
                 pos.xyz = norm.xyz;
-                pos.z  += lerp(sin( t * PI2 ), trig(t), gDeform) * gWaveAmp;
+                pos.w   = norm.x/gWaveLen + gTimer*.001*gWaveFreq;
+                pos.z  += lerp(sin(pos.w * PI2), trig(pos.w), gDeform) * gWaveAmp;
             } break;
         }
         pos.y  *= gAspect.x;
