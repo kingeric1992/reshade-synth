@@ -8,10 +8,16 @@
 
 #include "macro_vk.fxh"
 
-#define ARCBALL
-//#define LINES
+#define arcball
+
+#define POINTSEG (BUFFER_WIDTH/2)
+#define POINTROW (BUFFER_HEIGHT/2)
+
 #define LINESEG  240 //(BUFFER_WIDTH - 1)
 #define LINEROW  180 //(BUFFER_HEIGHT)
+
+#define TRIGSEG  160
+#define TRIGROW  90
 
 namespace synth
 {
@@ -46,6 +52,8 @@ namespace synth
     //uniform bool    gHovered    < source=
 
     static const float2 gAspect = float2(BUFFER_HEIGHT * BUFFER_RCP_WIDTH,1);
+    static const float2 gSizeR  = float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT);
+    static const float2 gSize   = float2(BUFFER_WIDTH, BUFFER_HEIGHT);
 
     #define ADDRESS(a) AddressU = a; AddressV = a; AddressW = a
     #define FILTER(a)  MagFilter = a; MinFilter = a; MipFilter = a
@@ -66,6 +74,7 @@ namespace synth
 /******************************************************************
  *  helpers
  ******************************************************************/
+
     float2   sincos(float r) { float2 sc; return sincos(r,sc.x,sc.y), sc; } // sin, cos
     float2   rotR(float2 p, float r) { float2 sc = sincos(r); return mul(float2x2(sc.y,-sc.x,sc), p); }
     float3x3 rotX(float r) { float2 sc = sincos(r); return float3x3( 1,0,0, 0,sc.y,-sc.x, 0,sc.x,sc.y); }
@@ -131,12 +140,11 @@ namespace synth
     float4 getRot() { return tex2Dfetch(sampEye, int2(0,0)); }
     float4 getEye() { return tex2Dfetch(sampEye, int2(1,0)); }
 
-
 #ifndef ARCBALL // roll when holding MMB
     float4 updRot()
     {
         float4   q = getRot();
-        float2   r = gPoint * float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT) * 2. - 1.;
+        float2   r = gPoint * gSizeR * 2. - 1.;
         float3   d = float3(gLMB*gDelta, gHand*gDelta.x) * gFrameTime * gMseSpeed * .0002;
         float3x3 m = rot(q);
 
@@ -190,39 +198,79 @@ namespace synth
 /******************************************************************
  *  transforms
  ******************************************************************/
-    float4 transform(float4 vpos) { return mul(mProj(),mul(mView(getRot(),getEye().xyz),vpos)); }
+    float4 transform(float4 p) { return mul(mProj(),mul(mView(getRot(),getEye().xyz),p)); }
+    float trig( float t ) { return abs(frac(t) * 2. - 1.) * 2. - 1.; }
 
-    // point generation
-    float4 getPosP(uint vid, out float4 col, out float2 uv) {
+    uniform float gRadius   <ui_type="slider"; ui_min=1;  ui_max=10;> = 3.;
+    uniform float gWaveFreq <ui_type="slider"; ui_min=-5; ui_max=5; > = 1;
+    uniform float gWaveLen  <ui_type="slider"; ui_min=.01;ui_max=5; > = .2;
+    uniform float gWaveAmp  <ui_type="slider"; ui_min=-1; ui_max=1; > = .2; 
+
+    // input norm pos <- [1,-1]
+    float4 posMod(float3 norm) {
         float4 pos;
-        pos.xy = map2D(vid, BUFFER_WIDTH);
-        pos.z  = dot( col.rgb = tex2Dfetch(sampCol, pos.xy).rgb, .333 * gAmp); // height by lum
-        pos.w  = 1;
 
-        uv = pos.xy *= float2(BUFFER_RCP_WIDTH, BUFFER_RCP_HEIGHT); //uv = map2D(vid, 2);
-        col.a = 1;
+        // without orientation change.
+        // all surface shift to z=0;
+        switch(gMode) {
+            
+            case PLANER : {
+                pos.xyz = norm;
+            } break;
 
-        pos.xy = pos.xy * 2. - 1.;
-        pos.y *= BUFFER_RCP_WIDTH * BUFFER_HEIGHT;
+            case CYLINDER : {
+                pos.xyz = normalize(float3(sin(norm.x),0,gRadius)) * (gRadius + norm.z) + float3(0, norm.y,-gRadius);
+            } break;
 
-        return pos;
+            case SPHERE : {
+                pos.xyz = normalize(float3(sin(norm.xy),gRadius)) * (gRadius + norm.z) - float3(0,0,gRadius);
+            } break;
+
+            case PERIODIC : {
+                float t = norm.x/gWaveLen + gTimer*.001*gWaveFreq;
+                pos.xyz = norm.xyz;
+                pos.z  += lerp(sin( t * PI2 ), trig(t), gDeform) * gWaveAmp;
+            } break;
+        }
+        pos.y  *= gAspect.x;
+        pos.w   = 1;
+        return pos; // output still around [1,-1]
+    }
+    // point generation
+    float4 getPosP(uint vid, out float4 col, out float2 uv) 
+    {
+        uv = (map2D(vid, POINTSEG) + .5) / float2(POINTSEG,POINTROW);
+
+        col.rgb = tex2Dfetch(sampCol, uv * gSize).rgb;
+        col.a   = 1; // no discarded point
+
+        return posMod(float3(-uv * 2. + 1, dot(col.rgb,.333) * gAmp));
     }
     // line generation
-    float4 getPosL(uint vid, out float4 col, out float2 uv) {
-        float4 pos;
+    float4 getPosL(uint vid, out float4 col, out float2 uv) 
+    {
         float2 lid = map2D(vid, LINESEG + 3); // lid.x <- [0, LINESEG + 2]
-
-        col.a   = step(.5, lid.x) * step(lid.x, LINESEG + 1.5);
 
         uv.x    = saturate((lid.x - 1.) / LINESEG );
         uv.y    = lid.y / (LINEROW - 1);
 
-        pos.w   = 1;
-        pos.z   = dot(col.rgb = tex2Dfetch(sampCol, uv * float2(BUFFER_WIDTH,BUFFER_HEIGHT)).rgb, .333 * gAmp);
-        pos.xy  = uv.xy * -2. + 1;
-        pos.y  *= BUFFER_RCP_WIDTH * BUFFER_HEIGHT;
+        col.rgb = tex2Dfetch(sampCol, uv * gSize).rgb;
+        col.a   = step(.5, lid.x) * step(lid.x, LINESEG + 1.5);
 
-        return pos;
+        return posMod(float3(-uv * 2. + 1, dot(col.rgb,.333) * gAmp));
+    }
+    // trig generation
+    float4 getPosT(uint vid, out float4 col, out float2 uv) 
+    {
+        int2 tid = map2D(vid, (TRIGSEG + 1) * 2 + 1 ); //
+        
+        uv.x = saturate((tid.x/2) / float(TRIGSEG + 1));
+        uv.y = (tid.y + (tid.x%2)) / float(TRIGROW);
+
+        col.rgb = tex2Dfetch(sampCol, uv * gSize).rgb;
+        col.a   = step(tid.x, (TRIGSEG + 1) * 2 - .5);
+
+        return posMod(float3(-uv * 2. + 1, dot(col.rgb,.333) * gAmp));
     }
 
 /******************************************************************
@@ -242,7 +290,12 @@ namespace synth
     float4 vs_line(uint vid : SV_VERTEXID, out float4 col : TEXCOORD) : SV_POSITION {
         float2 _; return transform(getPosL(vid, col, _));
     }
-
+    float4 vs_trigD(uint vid : SV_VERTEXID, out float4 col : TEXCOORD) : SV_POSITION {
+        float2 _; return transform(getPosT(vid, col, _));
+    }
+    float4 vs_trig(uint vid : SV_VERTEXID, out float4 col : TEXCOORD) : SV_POSITION {
+        float2 _; return transform(getPosT(vid, col, _));
+    }
     // per pixel depth test. would alpha blend faster then discard?
     float4 ps_draw( float4 vpos : SV_POSITION, float4 col : TEXCOORD0) : SV_TARGET {
         return col.a *= vpos.z >= tex2Dfetch(sampDep, vpos.xy).x, col;
@@ -251,6 +304,14 @@ namespace synth
     // SV_POSITION z component is screenspace z (clip.z / clip.w), w component is clipspace w (clip.w).
     float  ps_depth( float4 vpos : SV_POSITION, float4 col : TEXCOORD ) : SV_TARGET {
         if(col.a < .01) discard; else return vpos.z;
+    }
+
+    // draw gridline
+    float4 vs_grid( uint vid : SV_VERTEXID, out float2 uv : TEXCOORD ) : SV_POSITION {
+
+    }
+    float4 ps_grid( float4 vpos : SV_POSITION, float2 uv : TEXCOORD ) : SV_TARGET {
+
     }
 /******************************************************************
  *  technique
@@ -266,30 +327,59 @@ namespace synth
             RenderTarget        = texEye;
         }
     }
-    technique synth
+    #define DEF_PASS_CTRL \
+        upd { \
+            PrimitiveTopology   = LINELIST; \
+            VertexCount         = 2; \
+            VertexShader        = vs_ctrl; \
+            PixelShader         = ps_upd; \
+            RenderTarget        = texUpd; \
+        } \
+        pass eye { \
+            PrimitiveTopology   = LINELIST; \
+            VertexCount         = 2; \
+            VertexShader        = vs_ctrl; \
+            PixelShader         = ps_eye; \
+            RenderTarget        = texEye; \
+        }
+
+    technique synth_point
     {
-        pass upd {
-            PrimitiveTopology   = LINELIST;
-            VertexCount         = 2;
-            VertexShader        = vs_ctrl;
-            PixelShader         = ps_upd;
-            RenderTarget        = texUpd;
-        }
-        pass eye {
-            PrimitiveTopology   = LINELIST;
-            VertexCount         = 2;
-            VertexShader        = vs_ctrl;
-            PixelShader         = ps_eye;
-            RenderTarget        = texEye;
-        }
-    #ifdef LINES
+        pass DEF_PASS_CTRL
+
         pass depth {
+            ClearRenderTargets      = true;
+            VertexCount             = POINTSEG * POINTROW;
+            PrimitiveTopology       = POINTLIST;
+            VertexShader            = vs_pointD;
+            PixelShader             = ps_depth;
+            RenderTarget	        = texDep;
+            BlendEnable 	        = true;
+            BlendOp			        = Max;
+            DestBlend		        = ONE;
+        }
+        pass points {
+            ClearRenderTargets      = true;
+            VertexCount             = POINTSEG * POINTROW;
+            PrimitiveTopology       = POINTLIST;
+            VertexShader            = vs_point;
+            PixelShader             = ps_draw;
+            BlendEnable             = true;
+            SrcBlend                = SRCALPHA;
+            DestBlend               = INVSRCALPHA;
+            RenderTargetWriteMask   = 7;
+        }
+    }
+    technique synth_line
+    {
+        pass DEF_PASS_CTRL
+
+        pass depth {
+            ClearRenderTargets      = true;
             VertexCount             = (LINESEG + 3) * LINEROW;
             PrimitiveTopology       = LINESTRIP;
             VertexShader            = vs_lineD;
             PixelShader             = ps_depth;
-
-            ClearRenderTargets      = true;
             RenderTarget	        = texDep;
             BlendEnable 	        = true;
             BlendOp			        = Max;
@@ -306,30 +396,32 @@ namespace synth
             DestBlend               = INVSRCALPHA;
             RenderTargetWriteMask   = 7;
         }
-    #else
-        pass depth {
-            VertexCount             = BUFFER_WIDTH * BUFFER_HEIGHT;
-            PrimitiveTopology       = POINTLIST;
-            VertexShader            = vs_pointD;
-            PixelShader             = ps_depth;
+    }
+    technique synth_trig
+    {
+        pass DEF_PASS_CTRL
 
+        pass depth {
             ClearRenderTargets      = true;
+            VertexCount             = ((TRIGSEG + 1) * 2 + 1) * TRIGROW;
+            PrimitiveTopology       = TRIANGLESTRIP;
+            VertexShader            = vs_trigD;
+            PixelShader             = ps_depth;
             RenderTarget	        = texDep;
             BlendEnable 	        = true;
             BlendOp			        = Max;
             DestBlend		        = ONE;
         }
-        pass points {
+        pass lines {
             ClearRenderTargets      = true;
-            VertexCount             = BUFFER_WIDTH * BUFFER_HEIGHT;
-            PrimitiveTopology       = POINTLIST;
-            VertexShader            = vs_point;
+            VertexCount             = ((TRIGSEG + 1) * 2 + 1) * TRIGROW;
+            PrimitiveTopology       = TRIANGLESTRIP;
+            VertexShader            = vs_trig;
             PixelShader             = ps_draw;
             BlendEnable             = true;
             SrcBlend                = SRCALPHA;
             DestBlend               = INVSRCALPHA;
             RenderTargetWriteMask   = 7;
         }
-    #endif
     }
 }
