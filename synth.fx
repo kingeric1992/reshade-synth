@@ -8,7 +8,7 @@
 
 #include "macro_vk.fxh"
 
-#define arcball
+#define ARCBALL
 
 #define POINTSEG (BUFFER_WIDTH/2)
 #define POINTROW (BUFFER_HEIGHT/2)
@@ -201,11 +201,12 @@ namespace synth
     float4 transform(float4 p) { return mul(mProj(),mul(mView(getRot(),getEye().xyz),p)); }
     float trig( float t ) { return abs(frac(t) * 2. - 1.) * 2. - 1.; }
 
-    uniform uint  gMode     <ui_type="radio"; ui_items="planer\0cylinder\0sphere\0wave";> = 0;
-    uniform float gRadius   <ui_type="slider"; ui_min=1;  ui_max=10;> = 3.;
+    uniform uint  gMode     <ui_type="radio"; ui_items="planer\0cylinder\0sphere\0wave\0";> = 0;
+    uniform float gRadius   <ui_type="slider"; ui_min=.5;  ui_max=10;> = 3.;
     uniform float gWaveFreq <ui_type="slider"; ui_min=-5; ui_max=5; > = 1;
     uniform float gWaveLen  <ui_type="slider"; ui_min=.01;ui_max=5; > = .2;
     uniform float gWaveAmp  <ui_type="slider"; ui_min=-1; ui_max=1; > = .2;
+    uniform float gDeform   <ui_type="slider"; ui_min=0; ui_max=1;  > = 0;
 
     #define PLANER      0
     #define CYLINDER    1
@@ -220,8 +221,8 @@ namespace synth
         // all surface shift to z=0;
         switch(gMode) {
             case PLANER :   pos.xyz = norm; break;
-            case CYLINDER : pos.xyz = normalize(float3(sin(norm.x),0,gRadius)) * (gRadius + norm.z) + float3(0, norm.y,-gRadius); break;
-            case SPHERE :   pos.xyz = normalize(float3(sin(norm.xy),gRadius)) * (gRadius + norm.z) - float3(0,0,gRadius); break;
+            case CYLINDER : pos.xyz = normalize(float3(norm.x,0,gRadius)) * (gRadius + norm.z) + float3(0, norm.y,-gRadius); break;
+            case SPHERE :   pos.xyz = normalize(float3(norm.xy * gAspect.yx,gRadius)) * (gRadius + norm.z) / gAspect.yxy - float3(0,0,gRadius); break;
             case PERIODIC : {
                 pos.xyz = norm.xyz;
                 pos.w   = norm.x/gWaveLen + gTimer*.001*gWaveFreq;
@@ -233,17 +234,17 @@ namespace synth
         return pos; // output still around [1,-1]
     }
     // point generation
-    float4 getPosP(uint vid, out float4 col, out float2 uv) 
+    float4 getPosP(uint vid, out float4 col, out float2 uv)
     {
         uv = (map2D(vid, POINTSEG) + .5) / float2(POINTSEG,POINTROW);
 
         col.rgb = tex2Dfetch(sampCol, uv * gSize).rgb;
         col.a   = 1; // no discarded point
 
-        return posMod(float3(-uv * 2. + 1, dot(col.rgb,.333) * gAmp));
+        return posMod(float3( uv * 2. - 1, dot(col.rgb,.333) * gAmp));
     }
     // line generation
-    float4 getPosL(uint vid, out float4 col, out float2 uv) 
+    float4 getPosL(uint vid, out float4 col, out float2 uv)
     {
         float2 lid = map2D(vid, LINESEG + 3); // lid.x <- [0, LINESEG + 2]
 
@@ -253,20 +254,21 @@ namespace synth
         col.rgb = tex2Dfetch(sampCol, uv * gSize).rgb;
         col.a   = step(.5, lid.x) * step(lid.x, LINESEG + 1.5);
 
-        return posMod(float3(-uv * 2. + 1, dot(col.rgb,.333) * gAmp));
+        return posMod(float3( uv * 2. - 1, dot(col.rgb,.333) * gAmp));
     }
     // trig generation
-    float4 getPosT(uint vid, out float4 col, out float2 uv) 
+    float4 getPosT(uint vid, out float4 col, out float2 uv)
     {
-        int2 tid = map2D(vid, (TRIGSEG + 1) * 2 + 1 ); //
-        
-        uv.x = saturate((tid.x/2) / float(TRIGSEG + 1));
-        uv.y = (tid.y + (tid.x%2)) / float(TRIGROW);
+        int2 tid = map2D(vid, (TRIGSEG + 2) * 2 ); // [0, (TRIGSEG + 2) * 2 - 1]
+        int  id  = clamp(tid.x - 1,0, (TRIGSEG + 1) * 2 - 1);
+
+        uv.x = float(id/2) / TRIGSEG;
+        uv.y = (tid.y + float(id % 2)) / TRIGROW;
 
         col.rgb = tex2Dfetch(sampCol, uv * gSize).rgb;
-        col.a   = step(tid.x, (TRIGSEG + 1) * 2 - .5);
+        col.a   = step(.5, tid.x) * step(tid.x, (TRIGSEG + 1) * 2 + .5);
 
-        return posMod(float3(-uv * 2. + 1, dot(col.rgb,.333) * gAmp));
+        return posMod(float3( uv * 2. - 1, dot(col.rgb,.333) * gAmp));
     }
 
 /******************************************************************
@@ -299,16 +301,16 @@ namespace synth
     // write screenspace z to depth buffer
     // SV_POSITION z component is screenspace z (clip.z / clip.w), w component is clipspace w (clip.w).
     float  ps_depth( float4 vpos : SV_POSITION, float4 col : TEXCOORD ) : SV_TARGET {
-        if(col.a < .01) discard; else return vpos.z;
+        if(col.a < .1) discard; else return vpos.z;
     }
 
     // draw gridline
-    float4 vs_grid( uint vid : SV_VERTEXID, out float2 uv : TEXCOORD ) : SV_POSITION {
+    // float4 vs_grid( uint vid : SV_VERTEXID, out float2 uv : TEXCOORD ) : SV_POSITION {
 
-    }
-    float4 ps_grid( float4 vpos : SV_POSITION, float2 uv : TEXCOORD ) : SV_TARGET {
+    // }
+    // float4 ps_grid( float4 vpos : SV_POSITION, float2 uv : TEXCOORD ) : SV_TARGET {
 
-    }
+    // }
 /******************************************************************
  *  technique
  ******************************************************************/
@@ -399,7 +401,7 @@ namespace synth
 
         pass depth {
             ClearRenderTargets      = true;
-            VertexCount             = ((TRIGSEG + 1) * 2 + 1) * TRIGROW;
+            VertexCount             = (TRIGSEG + 2) * 2 * TRIGROW;
             PrimitiveTopology       = TRIANGLESTRIP;
             VertexShader            = vs_trigD;
             PixelShader             = ps_depth;
@@ -408,9 +410,9 @@ namespace synth
             BlendOp			        = Max;
             DestBlend		        = ONE;
         }
-        pass lines {
+        pass trig {
             ClearRenderTargets      = true;
-            VertexCount             = ((TRIGSEG + 1) * 2 + 1) * TRIGROW;
+            VertexCount             = (TRIGSEG + 2) * 2 * TRIGROW;
             PrimitiveTopology       = TRIANGLESTRIP;
             VertexShader            = vs_trig;
             PixelShader             = ps_draw;
