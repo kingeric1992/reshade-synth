@@ -28,6 +28,7 @@ namespace synth
     uniform float   gFov        < ui_type="slider"; ui_min=1; ui_max=179; ui_step=1;>   = 75;
     uniform float   gAmp        < ui_type="slider"; ui_min=0; ui_max=1; > = 1;
 
+    uniform bool    gGrid       < ui_label="draw gridline";> = true;
     uniform float   gMovSpeed   < ui_label="mov speed.";   ui_min = 0; ui_max = 10; > = 1;
     uniform float   gMseSpeed   < ui_label="mse sensitivity"; ui_min = 0; ui_max = 10; > = 0.1;
 
@@ -49,6 +50,7 @@ namespace synth
     uniform float   gFrameTime  < source="frametime";>;
     uniform bool    gOverlay    < source="overlay_open";>;
     uniform float   gTimer      < source="timer"; >;
+    uniform int     gActive     < source="overlay_active"; >;
     //uniform bool    gHovered    < source=
 
     static const float2 gAspect = float2(BUFFER_HEIGHT * BUFFER_RCP_WIDTH,1);
@@ -112,6 +114,8 @@ namespace synth
             2.*(xz-wy), 2.*(yz+wx), ww-xx-yy+zz
         );
     }
+
+    // M_view = M_rot * M_trans
     float4x4 mView( float3x3 _m, float3 _e) {
         return float4x4(
             _m[0], -dot(_m[0],_e),
@@ -123,6 +127,7 @@ namespace synth
     //float4x4 mView( float3 _r, float3 _e) { return mView(rotXYZ(_r), _e); }
     float4x4 mView( float4 _q, float3 _e) { return mView(rot(_q), _e); }
     //float4x4 mView( float3 _a, float _r, float3 _e) { return mView(rot(_a,_r), _e); }
+    //reverse z-depth.
     float4x4 mProj() {
         float zF = 10;
         float zN = 0.001;
@@ -164,7 +169,7 @@ namespace synth
     }
 #else // arcball
     float4 updRot() {
-        float3   d = float3(gLMB*gDelta, gHand*gDelta.x) * gFrameTime * gMseSpeed * .0002;
+        float3   d = float3(gLMB*gDelta, gHand*gDelta.x) * gFrameTime * gMseSpeed * .0002 * !gActive;
         float4   q = getRot();
         float3x3 m = rot(q);
         float2   l = float2(length(m[2].xy), length(m[0].xy));
@@ -177,7 +182,7 @@ namespace synth
     }
     float4 updEye()
     {
-        float3   s = float3(gRight - gLeft, gUp - gDown, gForward - gBack) * gFrameTime * .001 * gMovSpeed;
+        float3   s = float3(gRight - gLeft, gUp - gDown, gForward - gBack) * gFrameTime * .001 * gMovSpeed * !gActive;
         float4   e = getEye();
         float3x3 m = rot(updRot()); // x-axis, y-axis, z-axis
         float2   l = float2(length(m[2].xy), length(m[0].xy));
@@ -199,6 +204,7 @@ namespace synth
  *  transforms
  ******************************************************************/
     float4 transform(float4 p) { return mul(mProj(),mul(mView(getRot(),getEye().xyz),p)); }
+
     float trig( float t ) { return abs(frac(t) * 2. - 1.) * 2. - 1.; }
 
     uniform uint  gMode     <ui_type="radio"; ui_items="planer\0cylinder\0sphere\0wave\0";> = 0;
@@ -226,7 +232,7 @@ namespace synth
             case PERIODIC : {
                 pos.xyz = norm.xyz;
                 pos.w   = norm.x/gWaveLen + gTimer*.001*gWaveFreq;
-                pos.z  += lerp(sin(pos.w * PI2), trig(pos.w), gDeform) * gWaveAmp;
+                pos.z  += lerp(sin(pos.w * PI2), trig(pos.w), gDeform) * gWaveAmp * .1;
             } break;
         }
         pos.y  *= gAspect.x;
@@ -304,13 +310,52 @@ namespace synth
         if(col.a < .1) discard; else return vpos.z;
     }
 
-    // draw gridline
-    // float4 vs_grid( uint vid : SV_VERTEXID, out float2 uv : TEXCOORD ) : SV_POSITION {
 
+    float gridline(float2 uv) {
+        return any(abs(uv - trunc(uv)) < fwidth(uv));
+    }
+    // draw gridline (kinda work, but failed when out of)
+    // float4 vs_grid( uint vid : SV_VERTEXID, out float2 uv : TEXCOORD ) : SV_POSITION {
+    //     float3 p     = uint3(2,1,0) == vid ? float3(3,-3,1):float3(-1,1,1);     // view vector in clip space.
+    //     float3 v     = normalize(p*float3(tan(radians(gFov*.5))/gAspect,1));    // view vector at corner in view space
+    //     float3 w     = mul(v,rot(getRot()));                                    // view vector at corners in world space.
+    //     float3 e     = getEye().xyz;        // eye pos at world space.
+    //     float  r     = -e.z/w.z;            // linear depth along view vector in world space to z=0 plane.
+    //            uv    = (e + w*r).xy * 5.;   // intersection point in world space on z=0 plane
+    //     return mul(mProj(),float4(v*r,1));
     // }
     // float4 ps_grid( float4 vpos : SV_POSITION, float2 uv : TEXCOORD ) : SV_TARGET {
-
+    //     bool2 d = abs(uv) < fwidth(uv);
+    //     if(vpos.z >= tex2Dfetch(sampDep, vpos.xy).x)
+    //         return any(d)? float4(d,0,1) : gridline(uv)*.5;
+    //     discard;
     // }
+    // float4 ps_grid_depth( float4 vpos : SV_POSITION, float2 uv : TEXCOORD ) : SV_TARGET {
+    //     return vpos.z * gridline(uv);
+    // }
+    float4 vs_grid( uint vid : SV_VERTEXID, out float3 v : TEXCOORD ) : SV_POSITION {
+        float4 p = uint4(2,1,0,0) == vid ? float4(3,-3,0,1):float4(-1,1,0,1);       // view vector in clip space.
+        return v = p.xyw*float3(tan(radians(gFov*.5))/gAspect,1), p.xy *= gGrid, p; // view vector at corner in view space
+    }
+    float3 getGrid(float3 v) {
+        v = normalize(v);
+        float3 w = mul(v,rot(getRot()));                // view vector at corners in world space.
+        float3 e = getEye().xyz;                        // eye pos at world space.
+        float  r = -e.z/w.z;                            // linear depth along view vector in world space to z=0 plane.
+        float2 d = mul(mProj(),float4(v*r,1)).zw;
+        return float3((e + w*r).xy * 5., d.x/d.y);      // intersection point in world space on z=0 plane
+    }
+    float4 ps_grid( float4 vpos : SV_POSITION, float3 view : TEXCOORD ) : SV_TARGET {
+        view = getGrid(view);
+        bool2 d = abs(view.xy) < fwidth(view.xy);
+        if(view.z >= tex2Dfetch(sampDep, vpos.xy).x)
+            return any(d)? float4(d.yx,0,1) : gridline(view.xy)*.5;
+        discard;
+    }
+    float4 ps_grid_depth( float4 vpos : SV_POSITION, float3 view : TEXCOORD ) : SV_TARGET {
+        return view = getGrid(view), gridline(view.xy) * view.z;
+    }
+
 /******************************************************************
  *  technique
  ******************************************************************/
@@ -340,6 +385,23 @@ namespace synth
             PixelShader         = ps_eye; \
             RenderTarget        = texEye; \
         }
+    #define DEF_PASS_GRIDLINE \
+            depth { \
+            VertexShader            = vs_grid; \
+            PixelShader             = ps_grid_depth; \
+            RenderTarget	        = texDep; \
+            BlendEnable 	        = true; \
+            BlendOp			        = Max; \
+            DestBlend		        = ONE; \
+        } \
+        pass grid { \
+            VertexShader            = vs_grid; \
+            PixelShader             = ps_grid; \
+            BlendEnable             = true; \
+            SrcBlend                = SRCALPHA; \
+            DestBlend               = INVSRCALPHA; \
+            RenderTargetWriteMask   = 7; \
+        }
 
     technique synth_point
     {
@@ -367,6 +429,8 @@ namespace synth
             DestBlend               = INVSRCALPHA;
             RenderTargetWriteMask   = 7;
         }
+
+        pass DEF_PASS_GRIDLINE
     }
     technique synth_line
     {
@@ -394,6 +458,8 @@ namespace synth
             DestBlend               = INVSRCALPHA;
             RenderTargetWriteMask   = 7;
         }
+
+        pass DEF_PASS_GRIDLINE
     }
     technique synth_trig
     {
@@ -421,5 +487,7 @@ namespace synth
             DestBlend               = INVSRCALPHA;
             RenderTargetWriteMask   = 7;
         }
+
+        pass DEF_PASS_GRIDLINE
     }
 }
