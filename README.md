@@ -2,7 +2,7 @@
 ****
 An effect to view current frame in 3D space for ReShade by kingeric1992.
 
-[![Alt text]](https://img.youtube.com/vi/dhsHDgHjQzs/0.jpg)](https://www.youtube.com/watch?v=dhsHDgHjQzs)
+[![Alt text](https://img.youtube.com/vi/dhsHDgHjQzs/0.jpg)](https://www.youtube.com/watch?v=dhsHDgHjQzs)
 ## Installation
 Clone this repo to desired directory, and add the path to this directory for ReShade through ReShade in-game UI, editing `ReShade.ini`, or runs `install.bat` and type in path to `ReShade.ini`.
 
