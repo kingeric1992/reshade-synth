@@ -1,5 +1,4 @@
 # ReShade Synth [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](https://opensource.org/licenses/MIT)
-****
 An effect to view current frame in 3D space for ReShade by kingeric1992.
 
 [![Alt text](https://img.youtube.com/vi/dhsHDgHjQzs/0.jpg)](https://www.youtube.com/watch?v=dhsHDgHjQzs)
